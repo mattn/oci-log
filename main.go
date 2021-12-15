@@ -22,12 +22,6 @@ import (
 var _ = common.MakeDefaultHTTPRequest
 var _ = logging.ActionTypesCreated
 
-func fatalIf(err error) {
-	if err != nil {
-		log.Fatalln(err.Error())
-	}
-}
-
 func lineReader(wg *sync.WaitGroup, r io.Reader, ch chan string) {
 	defer wg.Done()
 	defer close(ch)
@@ -112,6 +106,7 @@ func main() {
 	var tee bool
 	var asjson bool
 	var max int
+	var verbose bool
 	flag.StringVar(&source, "source", os.Getenv("OCI_LOG_SOURCE"), "OCI Log Source ($OCI_LOG_SOURCE)")
 	flag.StringVar(&subject, "subject", os.Getenv("OCI_LOG_SUBJECT"), "OCI Log Subject ($OCI_LOG_SUBJECT)")
 	flag.StringVar(&ltype, "type", os.Getenv("OCI_LOG_TYPE"), "OCI Log Type ($OCI_LOG_TYPE)")
@@ -119,6 +114,7 @@ func main() {
 	flag.BoolVar(&tee, "tee", false, "Tee output")
 	flag.BoolVar(&asjson, "asjson", false, "Parse as JSON")
 	flag.IntVar(&max, "max", 100, "Buffer size")
+	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
 	flag.Parse()
 
 	if source == "" || subject == "" || ltype == "" || logId == "" {
@@ -129,14 +125,16 @@ func main() {
 		max = 0
 	}
 
+	client, err := loggingingestion.NewLoggingClientWithConfigurationProvider(common.DefaultConfigProvider())
+	if err != nil {
+		log.Fatalln(err.Error())
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 
 	ch := make(chan loggingingestion.LogEntryBatch)
 	go reader(&wg, os.Stdin, ch, tee, asjson, max)
-
-	client, err := loggingingestion.NewLoggingClientWithConfigurationProvider(common.DefaultConfigProvider())
-	fatalIf(err)
 
 	for {
 		batch, ok := <-ch
@@ -154,8 +152,18 @@ func main() {
 			},
 			TimestampOpcAgentProcessing: &common.SDKTime{Time: time.Now().UTC()},
 		}
+
 		_, err := client.PutLogs(context.Background(), req)
-		fatalIf(err)
+		if err != nil {
+			log.Println(err)
+		} else if verbose {
+			n := len(batch.Entries)
+			if n > 1 {
+				log.Printf("Sent %v entries", n)
+			} else {
+				log.Printf("Sent 1 entry")
+			}
+		}
 	}
 	wg.Wait()
 }

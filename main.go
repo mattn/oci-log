@@ -15,12 +15,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/oracle/oci-go-sdk/common"
-	"github.com/oracle/oci-go-sdk/logging"
 	"github.com/oracle/oci-go-sdk/loggingingestion"
 )
 
-var _ = common.MakeDefaultHTTPRequest
-var _ = logging.ActionTypesCreated
+type opt struct {
+	max     int
+	asjson  bool
+	tee     bool
+	verbose bool
+}
 
 func lineReader(wg *sync.WaitGroup, r io.Reader, ch chan string) {
 	defer wg.Done()
@@ -32,18 +35,18 @@ func lineReader(wg *sync.WaitGroup, r io.Reader, ch chan string) {
 	}
 }
 
-func makeBatch(lines []string, tee bool, asjson bool) loggingingestion.LogEntryBatch {
+func makeBatch(lines []string, opt opt) loggingingestion.LogEntryBatch {
 	now := time.Now()
 	batch := loggingingestion.LogEntryBatch{
 		Defaultlogentrytime: &common.SDKTime{Time: now},
 		Entries:             []loggingingestion.LogEntry{},
 	}
 	for _, line := range lines {
-		if tee {
+		if opt.tee {
 			fmt.Println(line)
 		}
 		var entry loggingingestion.LogEntry
-		if asjson {
+		if opt.asjson {
 			if err := json.NewDecoder(strings.NewReader(line)).Decode(&entry); err != nil {
 				continue
 			}
@@ -66,13 +69,13 @@ func makeBatch(lines []string, tee bool, asjson bool) loggingingestion.LogEntryB
 	return batch
 }
 
-func reader(wg *sync.WaitGroup, r io.Reader, ch chan loggingingestion.LogEntryBatch, tee bool, asjson bool, max int) {
+func reader(wg *sync.WaitGroup, r io.Reader, ch chan loggingingestion.LogEntryBatch, opt opt) {
 	defer wg.Done()
 	defer close(ch)
 
 	wg.Add(1)
 
-	lch := make(chan string, max)
+	lch := make(chan string, opt.max)
 	go lineReader(wg, r, lch)
 
 	var lines []string
@@ -83,15 +86,14 @@ loop:
 		case line, ok := <-lch:
 			if !ok {
 				if len(lines) > 0 {
-					ch <- makeBatch(lines, tee, asjson)
-					lines = nil
+					ch <- makeBatch(lines, opt)
 				}
 				break loop
 			}
 			lines = append(lines, line)
 		default:
 			if len(lines) > 0 {
-				ch <- makeBatch(lines, tee, asjson)
+				ch <- makeBatch(lines, opt)
 				lines = nil
 			}
 		}
@@ -103,26 +105,23 @@ func main() {
 	var source string
 	var subject string
 	var ltype string
-	var tee bool
-	var asjson bool
-	var max int
-	var verbose bool
+	var opt opt
 	flag.StringVar(&source, "source", os.Getenv("OCI_LOG_SOURCE"), "OCI Log Source ($OCI_LOG_SOURCE)")
 	flag.StringVar(&subject, "subject", os.Getenv("OCI_LOG_SUBJECT"), "OCI Log Subject ($OCI_LOG_SUBJECT)")
 	flag.StringVar(&ltype, "type", os.Getenv("OCI_LOG_TYPE"), "OCI Log Type ($OCI_LOG_TYPE)")
 	flag.StringVar(&logId, "logid", os.Getenv("OCI_LOG_ID"), "OCI Log ID ($OCI_LOG_ID)")
-	flag.BoolVar(&tee, "tee", false, "Tee output")
-	flag.BoolVar(&asjson, "asjson", false, "Parse as JSON")
-	flag.IntVar(&max, "max", 100, "Buffer size")
-	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
+	flag.BoolVar(&opt.tee, "tee", false, "Tee output")
+	flag.BoolVar(&opt.asjson, "asjson", false, "Parse as JSON")
+	flag.IntVar(&opt.max, "max", 100, "Buffer size")
+	flag.BoolVar(&opt.verbose, "verbose", false, "Verbose output")
 	flag.Parse()
 
 	if source == "" || subject == "" || ltype == "" || logId == "" {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if max < 0 {
-		max = 0
+	if opt.max < 0 {
+		opt.max = 0
 	}
 
 	client, err := loggingingestion.NewLoggingClientWithConfigurationProvider(common.DefaultConfigProvider())
@@ -134,7 +133,7 @@ func main() {
 	wg.Add(1)
 
 	ch := make(chan loggingingestion.LogEntryBatch)
-	go reader(&wg, os.Stdin, ch, tee, asjson, max)
+	go reader(&wg, os.Stdin, ch, opt)
 
 	for {
 		batch, ok := <-ch
@@ -156,7 +155,7 @@ func main() {
 		_, err := client.PutLogs(context.Background(), req)
 		if err != nil {
 			log.Println(err)
-		} else if verbose {
+		} else if opt.verbose {
 			n := len(batch.Entries)
 			if n > 1 {
 				log.Printf("Sent %v entries", n)

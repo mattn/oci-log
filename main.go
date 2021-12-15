@@ -85,17 +85,13 @@ loop:
 		select {
 		case line, ok := <-lch:
 			if !ok {
-				if len(lines) > 0 {
-					ch <- makeBatch(lines, opt)
-				}
+				ch <- makeBatch(lines, opt)
 				break loop
 			}
 			lines = append(lines, line)
 		default:
-			if len(lines) > 0 {
-				ch <- makeBatch(lines, opt)
-				lines = nil
-			}
+			ch <- makeBatch(lines, opt)
+			lines = nil
 		}
 	}
 }
@@ -140,6 +136,9 @@ func main() {
 		if !ok {
 			break
 		}
+		if len(batch.Entries) == 0 {
+			continue
+		}
 		batch.Source = common.String(source)
 		batch.Subject = common.String(subject)
 		batch.Type = common.String(ltype)
@@ -156,12 +155,7 @@ func main() {
 		if err != nil {
 			log.Println(err)
 		} else if opt.verbose {
-			n := len(batch.Entries)
-			if n > 1 {
-				log.Printf("Sent %v entries", n)
-			} else {
-				log.Printf("Sent 1 entry")
-			}
+			log.Printf("Sent %v entry(s)", len(batch.Entries))
 		}
 	}
 	wg.Wait()
